@@ -8,6 +8,7 @@ description = "Template project for Solarathon 2023"
 version = "0.0.1"
 dependencies = [
     "solara==1.23.0",
+    "ipyleaflet==0.17.4",
 ]
 
 [project.optional-dependencies]
