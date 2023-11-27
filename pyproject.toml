@@ -9,6 +9,10 @@ version = "0.0.1"
 dependencies = [
     "solara==1.23.0",
     "ipyleaflet==0.17.4",
+    "openai==0.28.1",
+    "langchain==0.0.331",
+    "pydantic==1.10.8",
+    "python-dotenv==1.0.0",
 ]
 
 [project.optional-dependencies]
