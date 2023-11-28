@@ -8,10 +8,59 @@ from langchain.chat_models import ChatOpenAI
 from langchain.prompts import ChatPromptTemplate
 from langchain.output_parsers.openai_functions import JsonOutputFunctionsParser
 from langchain.utils.openai_functions import convert_pydantic_to_openai_function
+import requests
 
 from dotenv import load_dotenv, find_dotenv
 _ = load_dotenv(find_dotenv())
 openai.api_key = os.environ["OPENAI_API_KEY"]
+
+def get_ticketmaster_events(api_key, location, topic, date, max_results=20):
+    endpoint = "https://app.ticketmaster.com/discovery/v2/events.json"
+    params = {
+        "apikey": api_key,
+        "keyword": topic,
+        "locale": "*",
+        "startDateTime": date + "T00:00:00Z",
+        "city": location,
+        "size": max_results
+    }
+
+    try:
+        response = requests.get(endpoint, params=params)
+        response.raise_for_status()  # Will raise an HTTPError if the HTTP request returned an unsuccessful status code
+    except requests.exceptions.RequestException as e:
+        print(f"Request error: {e}")
+        return []
+
+    data = response.json()
+    events = data.get("_embedded", {}).get("events", [])
+
+    events_list = []
+    unique_events = set()
+
+    for event in events:
+        name = event["name"]
+        venue = event.get("_embedded", {}).get("venues", [{}])[0]
+        venue_name = venue.get("name", "Unknown Venue")
+        lat = venue.get("location", {}).get("latitude")
+        lon = venue.get("location", {}).get("longitude")
+
+        if name not in unique_events and lat and lon:
+            unique_events.add(name)
+            event_details = {
+                "name": name,
+                "venue_name": venue_name,
+                "latitude": float(lat),
+                "longitude": float(lon)
+            }
+            events_list.append(event_details)
+
+            if len(unique_events) >= max_results:
+                break
+
+    print("Events fetched:", len(events_list))  # Debugging print statement
+    return events_list
+
 
 class Location(BaseModel):
     """Tag the text with the information required"""
@@ -32,9 +81,17 @@ location = solara.reactive("")
 zoom = solara.reactive(10)
 center = solara.reactive((48.8566, 2.3522))
 bounds = solara.reactive(None)
+markers = solara.reactive([])
+
+def add_marker(longitude, latitude, label):
+    markers.set(markers.value + [{"location": (latitude, longitude), "label": label}])
+    return "Marker added"
+
+
+url = ipyleaflet.basemaps.OpenStreetMap.Mapnik.build_url()
 
 @solara.component
-def Page():
+def FirstComponent():
     dates = solara.use_reactive(tuple([None, None]))
     solara.lab.InputDateRange(dates, label="Select traveling dates")
     if dates.value != tuple([None, None]):
@@ -60,3 +117,35 @@ def Page():
                     on_bounds=bounds.set,
                     scroll_wheel_zoom=True,
                 )
+
+@solara.component
+def Map():
+    ipyleaflet.Map.element(  # type: ignore
+        zoom=zoom.value,
+        center=center.value,
+        scroll_wheel_zoom=True,
+        layers=[
+           ipyleaflet.TileLayer.element(url=url),
+           *[
+           ipyleaflet.Marker.element(location=k["location"], draggable=False)
+           for k in markers.value
+           ],
+        ],
+    )
+
+@solara.component
+def Page():
+    with solara.Columns():
+        FirstComponent()
+        # Replace with user inputs
+        api_key = "MnRuGyDQ0gK5M1K1oed5herUtS34Y8Bs"
+        location = "Paris"
+        topic = "rock"
+        date = "2023-12-31"
+        events = get_ticketmaster_events(api_key, location, topic, date)
+        if events:
+            for event in events:
+                add_marker(event["longitude"], event["latitude"], event["name"])
+        else:
+            solara.Text("No events found.")
+        Map()
