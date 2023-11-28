@@ -14,14 +14,14 @@ from dotenv import load_dotenv, find_dotenv
 _ = load_dotenv(find_dotenv())
 openai.api_key = os.environ["OPENAI_API_KEY"]
 
-def get_ticketmaster_events(api_key, location, topic, date, max_results=20):
+def get_ticketmaster_events(api_key, location_events, topic, date, max_results=20):
     endpoint = "https://app.ticketmaster.com/discovery/v2/events.json"
     params = {
         "apikey": api_key,
         "keyword": topic,
         "locale": "*",
         "startDateTime": date + "T00:00:00Z",
-        "city": location,
+        "city": location_events,
         "size": max_results
     }
 
@@ -64,6 +64,7 @@ def get_ticketmaster_events(api_key, location, topic, date, max_results=20):
 
 class Location(BaseModel):
     """Tag the text with the information required"""
+    location: str = Field(description="the location")
     latitude: float = Field(description="the latitude of the location")
     longitude: float = Field(description="the longitude of the location")
 
@@ -77,7 +78,7 @@ prompt = ChatPromptTemplate.from_messages([
 output_parser = JsonOutputFunctionsParser()
 tagging_chain = prompt | model_with_functions | output_parser
 
-location = solara.reactive("")
+location = solara.reactive("Paris")
 zoom = solara.reactive(10)
 center = solara.reactive((48.8566, 2.3522))
 bounds = solara.reactive(None)
@@ -86,7 +87,6 @@ markers = solara.reactive([])
 def add_marker(longitude, latitude, label):
     markers.set(markers.value + [{"location": (latitude, longitude), "label": label}])
     return "Marker added"
-
 
 url = ipyleaflet.basemaps.OpenStreetMap.Mapnik.build_url()
 
@@ -100,23 +100,26 @@ def FirstComponent():
                 solara.Text(f"You are traveling for {(dates.value[1]-dates.value[0]).days} day from " + str(dates.value[0].strftime("%A, %d %B %Y")) + " to " + str(dates.value[1].strftime("%A, %d %B %Y"))+".")
             else:
                 solara.Text(f"You are traveling for {(dates.value[1]-dates.value[0]).days} days from " + str(dates.value[0].strftime("%A, %d %B %Y")) + " to " + str(dates.value[1].strftime("%A, %d %B %Y"))+".")
+
     solara.InputText("Select traveling location", value=location)
     if location.value != "":
         solara.Text(f"You are traveling to {location.value}. How exciting!")
         location_dict = tagging_chain.invoke({"input": f"{location.value}"})
+        solara.Text(f"Location: {location_dict['location']}")
         solara.Text(f"Latitude: {location_dict['latitude']}")
         solara.Text(f"Longitude: {location_dict['longitude']}")
+        location.value = location_dict['location']
         center.value = (location_dict['latitude'], location_dict['longitude'])
-        with solara.Column(style={"max-width": "500px", "height": "500px"}):
-            solara.SliderInt(label="Zoom level", value=zoom, min=1, max=20)
-            ipyleaflet.Map.element(  # type: ignore
-                    zoom=zoom.value,
-                    on_zoom=zoom.set,
-                    center=center.value,
-                    on_center=center.set,
-                    on_bounds=bounds.set,
-                    scroll_wheel_zoom=True,
-                )
+#        with solara.Column(style={"max-width": "500px", "height": "500px"}):
+#            solara.SliderInt(label="Zoom level", value=zoom, min=1, max=20)
+#            ipyleaflet.Map.element(  # type: ignore
+#                    zoom=zoom.value,
+#                    on_zoom=zoom.set,
+#                    center=center.value,
+#                    on_center=center.set,
+#                    on_bounds=bounds.set,
+#                    scroll_wheel_zoom=True,
+#                )
 
 @solara.component
 def Map():
@@ -139,13 +142,14 @@ def Page():
         FirstComponent()
         # Replace with user inputs
         api_key = "MnRuGyDQ0gK5M1K1oed5herUtS34Y8Bs"
-        location = "Paris"
         topic = "rock"
         date = "2023-12-31"
-        events = get_ticketmaster_events(api_key, location, topic, date)
-        if events:
+        def get_events():
+            events = get_ticketmaster_events(api_key, location.value, topic, date)
             for event in events:
                 add_marker(event["longitude"], event["latitude"], event["name"])
-        else:
-            solara.Text("No events found.")
+            return events
+        events = solara.use_memo(get_events, [location.value])
         Map()
+        if not events:
+            solara.Text("Not events found.")
