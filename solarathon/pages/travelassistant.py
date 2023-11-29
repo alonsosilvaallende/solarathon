@@ -10,9 +10,8 @@ from langchain.output_parsers.openai_functions import JsonOutputFunctionsParser
 from langchain.utils.openai_functions import convert_pydantic_to_openai_function
 import requests
 
-from dotenv import load_dotenv, find_dotenv
-_ = load_dotenv(find_dotenv())
-
+#from dotenv import load_dotenv, find_dotenv
+#_ = load_dotenv(find_dotenv())
 
 def get_ticketmaster_events(api_key, location_events, topic, date, max_results=20):
     endpoint = "https://app.ticketmaster.com/discovery/v2/events.json"
@@ -62,22 +61,6 @@ def get_ticketmaster_events(api_key, location_events, topic, date, max_results=2
     return events_list
 
 
-class Location(BaseModel):
-    """Tag the text with the information required"""
-    location: str = Field(description="the location")
-    latitude: float = Field(description="the latitude of the location")
-    longitude: float = Field(description="the longitude of the location")
-
-tagging_functions = [convert_pydantic_to_openai_function(Location)]
-model = ChatOpenAI(temperature=0)
-model_with_functions = model.bind(functions=tagging_functions)
-prompt = ChatPromptTemplate.from_messages([
-    ("system", "Think carefully, and then tag the text as required"),
-    ("user", "{input}")
-])
-output_parser = JsonOutputFunctionsParser()
-tagging_chain = prompt | model_with_functions | output_parser
-
 OPENAI_API_KEY = solara.reactive("")
 key_provided = solara.reactive(False)
 location = solara.reactive("Paris")
@@ -106,6 +89,16 @@ def FirstComponent():
     solara.InputText("Select traveling location", value=location)
     if location.value != "":
         solara.Text(f"You are traveling to {location.value}. How exciting!")
+        os.environ["OPENAI_API_KEY"] = f"{OPENAI_API_KEY.value}"
+        model = ChatOpenAI(temperature=0)
+        model_with_functions = model.bind(functions=tagging_functions)
+        prompt = ChatPromptTemplate.from_messages([
+            ("system", "Think carefully, and then tag the text as required"),
+            ("user", "{input}")
+        ])
+        output_parser = JsonOutputFunctionsParser()
+        tagging_chain = prompt | model_with_functions | output_parser
+
         location_dict = tagging_chain.invoke({"input": f"{location.value}"})
         solara.Text(f"Location: {location_dict['location']}")
         solara.Text(f"Latitude: {location_dict['latitude']}")
@@ -127,6 +120,13 @@ def Map():
            ],
         ],
     )
+class Location(BaseModel):
+    """Tag the text with the information required"""
+    location: str = Field(description="the location")
+    latitude: float = Field(description="the latitude of the location")
+    longitude: float = Field(description="the longitude of the location")
+
+tagging_functions = [convert_pydantic_to_openai_function(Location)]
 
 @solara.component
 def Page():
@@ -134,7 +134,6 @@ def Page():
         if OPENAI_API_KEY.value == "":
             solara.InputText("Enter your OpenAI API key", value=OPENAI_API_KEY, password=True)
         else:
-            os.environ["OPENAI_API_KEY"] = f"{OPENAI_API_KEY.value}"
             #openai.api_key = os.environ[f"{OPENAI_API_KEY.value}"]
             FirstComponent()
             # Replace with user inputs
