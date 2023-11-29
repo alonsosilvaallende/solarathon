@@ -9,6 +9,7 @@ from langchain.prompts import ChatPromptTemplate
 from langchain.output_parsers.openai_functions import JsonOutputFunctionsParser
 from langchain.utils.openai_functions import convert_pydantic_to_openai_function
 import requests
+from bs4 import BeautifulSoup
 
 #from dotenv import load_dotenv, find_dotenv
 #_ = load_dotenv(find_dotenv())
@@ -60,6 +61,19 @@ def get_ticketmaster_events(api_key, location_events, topic, date, max_results=2
     print("Events fetched:", len(events_list))  # Debugging print statement
     return events_list
 
+def scrap_gg_image(keyword):
+    params = {"q": 'travel '+keyword,
+              "tbm": "isch", 
+              "content-type": "image/png",
+             }
+    html = requests.get("https://www.google.com/search", params=params)
+    soup = BeautifulSoup(html.text, 'html.parser')
+    image_list = []
+    for img in soup.select("img"):
+        if 'googlelogo' not in img['src']:
+            image_list.append(img['src'])
+    return(image_list)
+
 
 OPENAI_API_KEY = solara.reactive("")
 key_provided = solara.reactive(False)
@@ -68,6 +82,7 @@ zoom = solara.reactive(10)
 center = solara.reactive((48.8566, 2.3522))
 bounds = solara.reactive(None)
 markers = solara.reactive([])
+image = solara.reactive([])
 
 def add_marker(longitude, latitude, label):
     markers.set(markers.value + [{"location": (latitude, longitude), "label": label}])
@@ -105,6 +120,7 @@ def FirstComponent():
         solara.Text(f"Longitude: {location_dict['longitude']}")
         location.value = location_dict['location']
         center.value = (location_dict['latitude'], location_dict['longitude'])
+        image.value = scrap_gg_image(location.value)
 
 @solara.component
 def Map():
@@ -120,6 +136,14 @@ def Map():
            ],
         ],
     )
+
+@solara.component
+def image_tile():
+    disp_item = 16 # google image provide up to 20 image
+    with solara.GridFixed(columns=4, align_items="end", justify_items="stretch"):
+        for img in image.value[:disp_item]:
+            solara.Image(img, width='100%')
+
 class Location(BaseModel):
     """Tag the text with the information required"""
     location: str = Field(description="the location")
@@ -130,7 +154,7 @@ tagging_functions = [convert_pydantic_to_openai_function(Location)]
 
 @solara.component
 def Page():
-    with solara.Columns():
+    with solara.Columns([1, 2, 2]):
         if OPENAI_API_KEY.value == "":
             solara.InputText("Enter your OpenAI API key", value=OPENAI_API_KEY, password=True)
         else:
@@ -146,6 +170,11 @@ def Page():
                     add_marker(event["longitude"], event["latitude"], event["name"])
                 return events
             events = solara.use_memo(get_events, [location.value])
-            Map()
-            if not events:
-                solara.Text("Not events found.")
+
+            if image.value:
+                image_tile()
+
+            with solara.Column():
+                Map()
+                if not events:
+                   solara.Warning("Not events found.")
