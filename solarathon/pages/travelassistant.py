@@ -137,7 +137,7 @@ def Page():
             solara.InputText("Enter your OpenAI API key", value=OPENAI_API_KEY, password=True)
         else:
             os.environ["OPENAI_API_KEY"] = f"{OPENAI_API_KEY.value}"
-            openai.api_key = os.environ["OPENAI_API_KEY"]
+            #openai.api_key = os.environ[f"{OPENAI_API_KEY.value}"]
             FirstComponent()
             # Replace with user inputs
             api_key = "MnRuGyDQ0gK5M1K1oed5herUtS34Y8Bs"
