@@ -14,8 +14,6 @@ from dotenv import load_dotenv, find_dotenv
 _ = load_dotenv(find_dotenv())
 
 
-openai.api_key = os.environ["OPENAI_API_KEY"]
-
 def get_ticketmaster_events(api_key, location_events, topic, date, max_results=20):
     endpoint = "https://app.ticketmaster.com/discovery/v2/events.json"
     params = {
