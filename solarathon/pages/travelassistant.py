@@ -12,6 +12,8 @@ import requests
 
 from dotenv import load_dotenv, find_dotenv
 _ = load_dotenv(find_dotenv())
+
+
 openai.api_key = os.environ["OPENAI_API_KEY"]
 
 def get_ticketmaster_events(api_key, location_events, topic, date, max_results=20):
@@ -78,6 +80,8 @@ prompt = ChatPromptTemplate.from_messages([
 output_parser = JsonOutputFunctionsParser()
 tagging_chain = prompt | model_with_functions | output_parser
 
+OPENAI_API_KEY = solara.reactive("")
+key_provided = solara.reactive(False)
 location = solara.reactive("Paris")
 zoom = solara.reactive(10)
 center = solara.reactive((48.8566, 2.3522))
@@ -110,16 +114,6 @@ def FirstComponent():
         solara.Text(f"Longitude: {location_dict['longitude']}")
         location.value = location_dict['location']
         center.value = (location_dict['latitude'], location_dict['longitude'])
-#        with solara.Column(style={"max-width": "500px", "height": "500px"}):
-#            solara.SliderInt(label="Zoom level", value=zoom, min=1, max=20)
-#            ipyleaflet.Map.element(  # type: ignore
-#                    zoom=zoom.value,
-#                    on_zoom=zoom.set,
-#                    center=center.value,
-#                    on_center=center.set,
-#                    on_bounds=bounds.set,
-#                    scroll_wheel_zoom=True,
-#                )
 
 @solara.component
 def Map():
@@ -130,7 +124,7 @@ def Map():
         layers=[
            ipyleaflet.TileLayer.element(url=url),
            *[
-           ipyleaflet.Marker.element(location=k["location"], draggable=False)
+           ipyleaflet.Marker.element(location=k["location"], title=k["label"], draggable=False)
            for k in markers.value
            ],
         ],
@@ -139,17 +133,22 @@ def Map():
 @solara.component
 def Page():
     with solara.Columns():
-        FirstComponent()
-        # Replace with user inputs
-        api_key = "MnRuGyDQ0gK5M1K1oed5herUtS34Y8Bs"
-        topic = "rock"
-        date = "2023-12-31"
-        def get_events():
-            events = get_ticketmaster_events(api_key, location.value, topic, date)
-            for event in events:
-                add_marker(event["longitude"], event["latitude"], event["name"])
-            return events
-        events = solara.use_memo(get_events, [location.value])
-        Map()
-        if not events:
-            solara.Text("Not events found.")
+        if OPENAI_API_KEY.value == "":
+            solara.InputText("Enter your OpenAI API key", value=OPENAI_API_KEY, password=True)
+        else:
+            os.environ["OPENAI_API_KEY"] = f"{OPENAI_API_KEY.value}"
+            openai.api_key = os.environ["OPENAI_API_KEY"]
+            FirstComponent()
+            # Replace with user inputs
+            api_key = "MnRuGyDQ0gK5M1K1oed5herUtS34Y8Bs"
+            topic = "rock"
+            date = "2023-12-31"
+            def get_events():
+                events = get_ticketmaster_events(api_key, location.value, topic, date)
+                for event in events:
+                    add_marker(event["longitude"], event["latitude"], event["name"])
+                return events
+            events = solara.use_memo(get_events, [location.value])
+            Map()
+            if not events:
+                solara.Text("Not events found.")
