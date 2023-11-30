@@ -1,12 +1,16 @@
 import solara
 import datetime as dt
 import ipyleaflet
+from ipyleaflet import AwesomeIcon
 import os
 import openai
+from typing import List
 from pydantic import BaseModel, Field
 from langchain.chat_models import ChatOpenAI
 from langchain.prompts import ChatPromptTemplate
 from langchain.output_parsers.openai_functions import JsonOutputFunctionsParser
+from langchain.schema.output_parser import StrOutputParser
+from langchain.output_parsers.openai_functions import JsonKeyOutputFunctionsParser
 from langchain.utils.openai_functions import convert_pydantic_to_openai_function
 import requests
 
@@ -63,14 +67,15 @@ def get_ticketmaster_events(api_key, location_events, topic, date, max_results=2
 
 OPENAI_API_KEY = solara.reactive("")
 key_provided = solara.reactive(False)
-location = solara.reactive("Paris")
+location = solara.reactive("")
 zoom = solara.reactive(10)
 center = solara.reactive((48.8566, 2.3522))
 bounds = solara.reactive(None)
 markers = solara.reactive([])
+current_events = solara.reactive(False)
 
-def add_marker(longitude, latitude, label):
-    markers.set(markers.value + [{"location": (latitude, longitude), "label": label}])
+def add_marker(longitude, latitude, label, icon):
+    markers.set(markers.value + [{"location": (latitude, longitude), "label": label, "icon": icon}])
     return "Marker added"
 
 url = ipyleaflet.basemaps.OpenStreetMap.Mapnik.build_url()
@@ -85,7 +90,7 @@ def FirstComponent():
                 solara.Text(f"You are traveling for {(dates.value[1]-dates.value[0]).days} day from " + str(dates.value[0].strftime("%A, %d %B %Y")) + " to " + str(dates.value[1].strftime("%A, %d %B %Y"))+".")
             else:
                 solara.Text(f"You are traveling for {(dates.value[1]-dates.value[0]).days} days from " + str(dates.value[0].strftime("%A, %d %B %Y")) + " to " + str(dates.value[1].strftime("%A, %d %B %Y"))+".")
-
+    solara.Checkbox(label="Concerts happening on those dates", value=current_events)
     solara.InputText("Select traveling location", value=location)
     if location.value != "":
         solara.Text(f"You are traveling to {location.value}. How exciting!")
@@ -100,14 +105,42 @@ def FirstComponent():
         tagging_chain = prompt | model_with_functions | output_parser
 
         location_dict = tagging_chain.invoke({"input": f"{location.value}"})
-        solara.Text(f"Location: {location_dict['location']}")
-        solara.Text(f"Latitude: {location_dict['latitude']}")
-        solara.Text(f"Longitude: {location_dict['longitude']}")
+#        solara.Text(f"Location: {location_dict['location']}")
+#        solara.Text(f"Latitude: {location_dict['latitude']}")
+#        solara.Text(f"Longitude: {location_dict['longitude']}")
         location.value = location_dict['location']
         center.value = (location_dict['latitude'], location_dict['longitude'])
 
+        # Chain to obtain the top 10 touristic attractions in a location
+        prompt_get_top10 = ChatPromptTemplate.from_messages([
+            ("system", "You are a helpful travel assistant"),
+            ("user", "Give me the top 3 touristic attractions in {input}")
+        ])
+        output_parser_get_top10 = StrOutputParser()
+        chain_get_top10 = prompt_get_top10 | model | output_parser_get_top10
+        result = chain_get_top10.invoke({"input": location.value})
+        solara.Markdown(result)
+    
+        def get_attractions():
+            # Extraction chain to obtain latitude and longitude of the top 10 touristic attractions in a location
+            extraction_functions = [convert_pydantic_to_openai_function(Information)]
+            extraction_model = model.bind(functions=extraction_functions, function_call={"name": "Information"})
+            extraction_output_parser = JsonKeyOutputFunctionsParser(key_name="TuristicAttractions")
+            extraction_prompt = ChatPromptTemplate.from_messages([
+                ("system", "Extract the relevant information, if not explicitly provided do not guess. Extract partial info"),
+                ("human", "{input}")
+            ])
+            extraction_chain = extraction_prompt | extraction_model | extraction_output_parser
+            attractions = extraction_chain.invoke({"input": result})
+            for attraction in attractions:
+                add_marker(attraction["longitude"], attraction["latitude"], attraction["name"], "icon_attraction")
+            return attractions
+        attractions = solara.use_memo(get_attractions, [location.value])
+
 @solara.component
 def Map():
+    def my_icon(icon):
+        return AwesomeIcon(name="music", marker_color="red") if icon=="icon_event" else AwesomeIcon(name="bolt", marker_color="blue")
     ipyleaflet.Map.element(  # type: ignore
         zoom=zoom.value,
         center=center.value,
@@ -115,7 +148,7 @@ def Map():
         layers=[
            ipyleaflet.TileLayer.element(url=url),
            *[
-           ipyleaflet.Marker.element(location=k["location"], title=k["label"], draggable=False)
+           ipyleaflet.Marker.element(location=k["location"], title=k["label"], draggable=False, icon=my_icon(k["icon"]))
            for k in markers.value
            ],
         ],
@@ -127,6 +160,16 @@ class Location(BaseModel):
     longitude: float = Field(description="the longitude of the location")
 
 tagging_functions = [convert_pydantic_to_openai_function(Location)]
+
+class TuristicAttraction(BaseModel):
+    """Information about a touristic attraction"""
+    name: str = Field(description="The name of the touristic attraction")
+    latitude: float = Field(description="the latitude of the touristic attraction")
+    longitude: float = Field(description="the longitude of the touristic attraction")
+
+class Information(BaseModel):
+    """Information to extract."""
+    TuristicAttractions: List[TuristicAttraction] = Field(description="List of info about touristic attractions")
 
 @solara.component
 def Page():
@@ -141,11 +184,14 @@ def Page():
             topic = "rock"
             date = "2023-12-31"
             def get_events():
-                events = get_ticketmaster_events(api_key, location.value, topic, date)
-                for event in events:
-                    add_marker(event["longitude"], event["latitude"], event["name"])
-                return events
-            events = solara.use_memo(get_events, [location.value])
+                if current_events.value:
+                    events = get_ticketmaster_events(api_key, location.value, topic, date)
+                    for event in events:
+                        add_marker(event["longitude"], event["latitude"], event["name"], "icon_event")
+                    return events
+                else:
+                    return []
+            events = solara.use_memo(get_events, [location.value, current_events.value])
             Map()
-            if not events:
-                solara.Text("Not events found.")
+#            if not events:
+#                solara.Text("Not events found.")
