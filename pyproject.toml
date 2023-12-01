@@ -12,7 +12,7 @@ dependencies = [
     "openai==0.28.1",
     "langchain==0.0.331",
     "pydantic==1.10.8",
-    "python-dotenv==1.0.0",
+    "BeautifulSoup4==4.12.2"
 ]
 
 [project.optional-dependencies]

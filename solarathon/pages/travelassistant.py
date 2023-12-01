@@ -1,5 +1,5 @@
 import solara
-import datetime as dt
+import datetime
 import ipyleaflet
 from ipyleaflet import AwesomeIcon
 import os
@@ -13,9 +13,35 @@ from langchain.schema.output_parser import StrOutputParser
 from langchain.output_parsers.openai_functions import JsonKeyOutputFunctionsParser
 from langchain.utils.openai_functions import convert_pydantic_to_openai_function
 import requests
+from bs4 import BeautifulSoup
 
 #from dotenv import load_dotenv, find_dotenv
 #_ = load_dotenv(find_dotenv())
+
+def get_season(date: datetime.datetime, north_hemisphere: bool = True) -> str:
+    now = (date.month, date.day)
+    if (3, 21) <= now < (6, 21):
+        season = 'spring' if north_hemisphere else 'fall'
+    elif (6, 21) <= now < (9, 21):
+        season = 'summer' if north_hemisphere else 'winter'
+    elif (9, 21) <= now < (12, 21):
+        season = 'fall' if north_hemisphere else 'spring'
+    else:
+        season = 'winter' if north_hemisphere else 'summer'
+    return season
+
+def scrap_gg_images(keyword, season=""):
+    params = {"q": 'travel '+keyword+season,
+              "tbm": "isch",
+              "content-type": "image/png",
+             }
+    html = requests.get("https://www.google.com/search", params=params)
+    soup = BeautifulSoup(html.text, 'html.parser')
+    image_list = []
+    for img in soup.select("img"):
+        if 'googlelogo' not in img['src']:
+            image_list.append(img['src'])
+    return(image_list)
 
 def get_ticketmaster_events(api_key, location_events, topic, date, max_results=20):
     endpoint = "https://app.ticketmaster.com/discovery/v2/events.json"
@@ -67,12 +93,15 @@ def get_ticketmaster_events(api_key, location_events, topic, date, max_results=2
 
 OPENAI_API_KEY = solara.reactive("")
 key_provided = solara.reactive(False)
-location = solara.reactive("")
+location = solara.reactive("Paris")
 zoom = solara.reactive(10)
 center = solara.reactive((48.8566, 2.3522))
 bounds = solara.reactive(None)
 markers = solara.reactive([])
 current_events = solara.reactive(False)
+initial_images = scrap_gg_images(f"{location.value}")
+images = solara.reactive(initial_images)
+topic_keyword = solara.reactive("rock")
 
 def add_marker(longitude, latitude, label, icon):
     markers.set(markers.value + [{"location": (latitude, longitude), "label": label, "icon": icon}])
@@ -91,9 +120,14 @@ def FirstComponent():
             else:
                 solara.Text(f"You are traveling for {(dates.value[1]-dates.value[0]).days} days from " + str(dates.value[0].strftime("%A, %d %B %Y")) + " to " + str(dates.value[1].strftime("%A, %d %B %Y"))+".")
     solara.Checkbox(label="Concerts happening on those dates", value=current_events)
+    solara.InputText("Select concerts topic", value=topic_keyword)
     solara.InputText("Select traveling location", value=location)
     if location.value != "":
         solara.Text(f"You are traveling to {location.value}. How exciting!")
+        if dates.value != tuple([None, None]):
+            images.value = scrap_gg_images(f"{location.value}", f"{get_season(dates.value[0])}")
+        else:
+            images.value = scrap_gg_images(f"{location.value}")
         os.environ["OPENAI_API_KEY"] = f"{OPENAI_API_KEY.value}"
         model = ChatOpenAI(temperature=0)
         model_with_functions = model.bind(functions=tagging_functions)
@@ -105,9 +139,6 @@ def FirstComponent():
         tagging_chain = prompt | model_with_functions | output_parser
 
         location_dict = tagging_chain.invoke({"input": f"{location.value}"})
-#        solara.Text(f"Location: {location_dict['location']}")
-#        solara.Text(f"Latitude: {location_dict['latitude']}")
-#        solara.Text(f"Longitude: {location_dict['longitude']}")
         location.value = location_dict['location']
         center.value = (location_dict['latitude'], location_dict['longitude'])
 
@@ -172,6 +203,12 @@ class Information(BaseModel):
     TuristicAttractions: List[TuristicAttraction] = Field(description="List of info about touristic attractions")
 
 @solara.component
+def DisplayImages(images):
+    with solara.GridFixed(columns=3, align_items="end", justify_items="stretch"):
+        for img in images:
+            solara.Image(img, width='300')
+
+@solara.component
 def Page():
     with solara.Columns():
         if OPENAI_API_KEY.value == "":
@@ -181,7 +218,7 @@ def Page():
             FirstComponent()
             # Replace with user inputs
             api_key = "MnRuGyDQ0gK5M1K1oed5herUtS34Y8Bs"
-            topic = "rock"
+            topic = topic_keyword.value
             date = "2023-12-31"
             def get_events():
                 if current_events.value:
@@ -190,8 +227,9 @@ def Page():
                         add_marker(event["longitude"], event["latitude"], event["name"], "icon_event")
                     return events
                 else:
-                    return []
+                    markers.value = []
             events = solara.use_memo(get_events, [location.value, current_events.value])
+            DisplayImages(images.value)
             Map()
 #            if not events:
 #                solara.Text("Not events found.")
