@@ -15,6 +15,7 @@ from langchain.output_parsers.openai_functions import JsonKeyOutputFunctionsPars
 from langchain.utils.openai_functions import convert_pydantic_to_openai_function
 import requests
 from bs4 import BeautifulSoup
+# needed to make calls to OpenAI concurrently
 import nest_asyncio
 nest_asyncio.apply()
 
@@ -33,6 +34,8 @@ def get_season(date: datetime.datetime, north_hemisphere: bool = True) -> str:
         season = 'winter' if north_hemisphere else 'summer'
     return season
 
+# Scrap Google Images of a city during a season
+# e.g. 'travel Paris winter'
 def scrap_gg_images(keyword, season=""):
     params = {"q": 'travel '+keyword+season,
               "tbm": "isch",
@@ -46,6 +49,7 @@ def scrap_gg_images(keyword, season=""):
             image_list.append(img['src'])
     return(image_list)
 
+# Get ticketmaster events for a date and a topic
 def get_ticketmaster_events(api_key, location_events, topic, date, max_results=20):
     endpoint = "https://app.ticketmaster.com/discovery/v2/events.json"
     params = {
@@ -126,38 +130,48 @@ def FirstComponent():
     solara.InputText("Select concerts topic", value=topic_keyword)
     solara.InputText("Select traveling location", value=location)
     if location.value != "":
-        solara.Markdown(f"You are traveling to {location.value}. How exciting!\n\nThe main turistic attractions are:")
+        solara.Markdown(f"You are traveling to {location.value}. How exciting!\n\nThe main turistic attractions in {location.value} are:")
         if dates.value != tuple([None, None]):
             images.value = scrap_gg_images(f"{location.value}", f"{get_season(dates.value[0])}")
         else:
             images.value = scrap_gg_images(f"{location.value}")
         os.environ["OPENAI_API_KEY"] = f"{OPENAI_API_KEY.value}"
-        model = ChatOpenAI(temperature=0)
-        model_with_functions = model.bind(functions=tagging_functions)
-        prompt = ChatPromptTemplate.from_messages([
-            ("system", "Think carefully, and then tag the text as required"),
-            ("user", "{input}")
-        ])
-        output_parser = JsonOutputFunctionsParser()
-        tagging_chain = prompt | model_with_functions | output_parser
+        # Tagging chain to determine the location, its latitude and its longitude
+        def get_location():
+            model = ChatOpenAI(temperature=0)
+            model_with_functions = model.bind(functions=tagging_functions)
+            prompt = ChatPromptTemplate.from_messages([
+                ("system", "Think carefully, and then tag the text as required"),
+                ("user", "{input}")
+            ])
+            output_parser = JsonOutputFunctionsParser()
+            tagging_chain = prompt | model_with_functions | output_parser
+            location_dict = tagging_chain.invoke({"input": f"{location.value}"})
+            location.value = location_dict['location']
+            center.value = (location_dict['latitude'], location_dict['longitude'])
 
-        location_dict = tagging_chain.invoke({"input": f"{location.value}"})
-        location.value = location_dict['location']
-        center.value = (location_dict['latitude'], location_dict['longitude'])
-
+        precise_location = solara.use_thread(get_location, [location.value])
+        solara.ProgressLinear(precise_location.state == solara.ResultState.RUNNING)
         # Chain to obtain the top 10 touristic attractions in a location
-        prompt_get_top10 = ChatPromptTemplate.from_messages([
-            ("system", "You are a helpful travel assistant"),
-            ("user", "Give me the top 10 touristic attractions names in {input}. Do not add comments.")
-        ])
-        output_parser_get_top10 = StrOutputParser()
-        chain_get_top10 = prompt_get_top10 | model | output_parser_get_top10
-        result = chain_get_top10.invoke({"input": location.value})
-        print(result)
-        solara.Markdown(result)
+        def get_top10():
+            model = ChatOpenAI(temperature=0)
+            prompt_get_top10 = ChatPromptTemplate.from_messages([
+                ("system", "You are a helpful travel assistant"),
+                ("user", "Give me the top 10 touristic attractions names in {input}. Do not add comments.")
+            ])
+            output_parser_get_top10 = StrOutputParser()
+            chain_get_top10 = prompt_get_top10 | model | output_parser_get_top10
+            result = chain_get_top10.invoke({"input": location.value})
+            return result
+        result = solara.use_thread(get_top10, [location.value])
+        solara.ProgressLinear(result.state == solara.ResultState.RUNNING)
+        if result.value is None:
+            return
+        solara.Markdown(result.value)
     
         def get_attractions():
             # Extraction chain to obtain latitude and longitude of the top 10 touristic attractions in a location
+            model = ChatOpenAI(temperature=0)
             extraction_model = model.bind(functions=extraction_functions, function_call={"name": "Information"})
             extraction_output_parser = JsonKeyOutputFunctionsParser(key_name="TuristicAttractions")
             extraction_prompt = ChatPromptTemplate.from_messages([
@@ -165,21 +179,26 @@ def FirstComponent():
                 ("human", "{input}")
             ])
             extraction_chain = extraction_prompt | extraction_model | extraction_output_parser
-            #attractions = extraction_chain.invoke({"input": result})
             async def async_invoke(input):
                 return await extraction_chain.ainvoke({"input": f"{input}"})
 
             async def invoke_concurrently():
-                tasks = [async_invoke(attraction) for attraction in result.split('\n')]
+                tasks = [async_invoke(attraction) for attraction in result.value.split('\n')]
                 return await asyncio.gather(*tasks)
 
             attractions = asyncio.run(invoke_concurrently())
-            
             for attraction in attractions:
                 add_marker(attraction[0]["longitude"], attraction[0]["latitude"], attraction[0]["name"], "icon_attraction")
 
             return attractions
-        attractions = solara.use_memo(get_attractions, [location.value])
+        attractions = solara.use_thread(get_attractions, [location.value])
+        solara.ProgressLinear(attractions.state == solara.ResultState.RUNNING)
+
+        if attractions.value is None:
+            return
+        #for attraction in attractions.value:
+        #    add_marker(attraction[0]["longitude"], attraction[0]["latitude"], attraction[0]["name"], "icon_attraction")
+
 
 @solara.component
 def Map():
