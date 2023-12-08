@@ -1,4 +1,5 @@
 import solara
+import asyncio
 import datetime
 import ipyleaflet
 from ipyleaflet import AwesomeIcon
@@ -14,6 +15,8 @@ from langchain.output_parsers.openai_functions import JsonKeyOutputFunctionsPars
 from langchain.utils.openai_functions import convert_pydantic_to_openai_function
 import requests
 from bs4 import BeautifulSoup
+import nest_asyncio
+nest_asyncio.apply()
 
 #from dotenv import load_dotenv, find_dotenv
 #_ = load_dotenv(find_dotenv())
@@ -123,7 +126,7 @@ def FirstComponent():
     solara.InputText("Select concerts topic", value=topic_keyword)
     solara.InputText("Select traveling location", value=location)
     if location.value != "":
-        solara.Text(f"You are traveling to {location.value}. How exciting!")
+        solara.Markdown(f"You are traveling to {location.value}. How exciting!\n\nThe main turistic attractions are:")
         if dates.value != tuple([None, None]):
             images.value = scrap_gg_images(f"{location.value}", f"{get_season(dates.value[0])}")
         else:
@@ -145,16 +148,16 @@ def FirstComponent():
         # Chain to obtain the top 10 touristic attractions in a location
         prompt_get_top10 = ChatPromptTemplate.from_messages([
             ("system", "You are a helpful travel assistant"),
-            ("user", "Give me the top 3 touristic attractions in {input}")
+            ("user", "Give me the top 10 touristic attractions names in {input}. Do not add comments.")
         ])
         output_parser_get_top10 = StrOutputParser()
         chain_get_top10 = prompt_get_top10 | model | output_parser_get_top10
         result = chain_get_top10.invoke({"input": location.value})
+        print(result)
         solara.Markdown(result)
     
         def get_attractions():
             # Extraction chain to obtain latitude and longitude of the top 10 touristic attractions in a location
-            extraction_functions = [convert_pydantic_to_openai_function(Information)]
             extraction_model = model.bind(functions=extraction_functions, function_call={"name": "Information"})
             extraction_output_parser = JsonKeyOutputFunctionsParser(key_name="TuristicAttractions")
             extraction_prompt = ChatPromptTemplate.from_messages([
@@ -162,9 +165,19 @@ def FirstComponent():
                 ("human", "{input}")
             ])
             extraction_chain = extraction_prompt | extraction_model | extraction_output_parser
-            attractions = extraction_chain.invoke({"input": result})
+            #attractions = extraction_chain.invoke({"input": result})
+            async def async_invoke(input):
+                return await extraction_chain.ainvoke({"input": f"{input}"})
+
+            async def invoke_concurrently():
+                tasks = [async_invoke(attraction) for attraction in result.split('\n')]
+                return await asyncio.gather(*tasks)
+
+            attractions = asyncio.run(invoke_concurrently())
+            
             for attraction in attractions:
-                add_marker(attraction["longitude"], attraction["latitude"], attraction["name"], "icon_attraction")
+                add_marker(attraction[0]["longitude"], attraction[0]["latitude"], attraction[0]["name"], "icon_attraction")
+
             return attractions
         attractions = solara.use_memo(get_attractions, [location.value])
 
@@ -202,6 +215,8 @@ class Information(BaseModel):
     """Information to extract."""
     TuristicAttractions: List[TuristicAttraction] = Field(description="List of info about touristic attractions")
 
+extraction_functions = [convert_pydantic_to_openai_function(Information)]
+
 @solara.component
 def DisplayImages(images):
     with solara.GridFixed(columns=3, align_items="end", justify_items="stretch"):
@@ -210,11 +225,13 @@ def DisplayImages(images):
 
 @solara.component
 def Page():
-    with solara.Columns():
+    with solara.Columns(style={"height": "calc(100% - 30px)"}):
+        #if False:
         if OPENAI_API_KEY.value == "":
             solara.InputText("Enter your OpenAI API key", value=OPENAI_API_KEY, password=True)
         else:
             #openai.api_key = os.environ[f"{OPENAI_API_KEY.value}"]
+            os.environ["OPENAI_API_KEY"] = f"{OPENAI_API_KEY.value}"
             FirstComponent()
             # Replace with user inputs
             api_key = "MnRuGyDQ0gK5M1K1oed5herUtS34Y8Bs"
