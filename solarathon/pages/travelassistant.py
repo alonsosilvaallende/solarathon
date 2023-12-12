@@ -101,6 +101,7 @@ def get_ticketmaster_events(api_key, location_events, topic, date, max_results=2
 OPENAI_API_KEY = solara.reactive("")
 key_provided = solara.reactive(False)
 location = solara.reactive("Paris")
+result = solara.reactive("")
 zoom = solara.reactive(10)
 center = solara.reactive((48.8566, 2.3522))
 bounds = solara.reactive(None)
@@ -161,12 +162,13 @@ def FirstComponent():
             ])
             output_parser_get_top10 = StrOutputParser()
             chain_get_top10 = prompt_get_top10 | model | output_parser_get_top10
-            result = chain_get_top10.invoke({"input": location.value})
-            return result
-        result = solara.use_thread(get_top10, [location.value])
-        solara.ProgressLinear(result.state == solara.ResultState.RUNNING)
-        if result.value is None:
+            partial_result = chain_get_top10.invoke({"input": location.value})
+            return partial_result
+        partial_result = solara.use_thread(get_top10, [location.value])
+        solara.ProgressLinear(partial_result.state == solara.ResultState.RUNNING)
+        if partial_result.value is None:
             return
+        result.value = partial_result.value
         solara.Markdown(result.value)
     
         def get_attractions():
@@ -191,7 +193,7 @@ def FirstComponent():
                 add_marker(attraction[0]["longitude"], attraction[0]["latitude"], attraction[0]["name"], "icon_attraction")
 
             return attractions
-        attractions = solara.use_thread(get_attractions, [location.value])
+        attractions = solara.use_thread(get_attractions, [result.value])
         solara.ProgressLinear(attractions.state == solara.ResultState.RUNNING)
 
         if attractions.value is None:
